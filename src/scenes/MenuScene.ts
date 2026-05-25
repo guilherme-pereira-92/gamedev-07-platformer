@@ -4,8 +4,9 @@ import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, getResponsiveT
 import { takeScreenshot } from "../screenshot";
 import { unlockAudio } from "../audio";
 import { isTouchDevice } from "../input";
+import { LEVELS, BESTPHASE_KEY, BESTCOINS_KEY } from "./GameScene";
 
-const HIGHSCORE_KEY = "gamedev-07-platformer-bestcoins";
+const HIGHSCORE_KEY = BESTCOINS_KEY;
 
 export class MenuScene extends Phaser.Scene {
   private keys!: Record<"SPACE" | "ENTER" | "K", Phaser.Input.Keyboard.Key>;
@@ -14,6 +15,7 @@ export class MenuScene extends Phaser.Scene {
 
   create() {
     const best = this.loadBest();
+    const bestPhase = this.loadBestPhase();
     const W = this.scale.width;
     const H = this.scale.height;
 
@@ -22,7 +24,9 @@ export class MenuScene extends Phaser.Scene {
 
     addCornerLabel(this, 22, 22, "/ 07", "PLATFORMER", false);
     createPulsingDot(this, W - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
-    this.add.text(W - 38, 22, `MELHOR  ${String(best).padStart(3, "0")} COINS`, TEXT_PRESETS.monoLabel).setOrigin(1, 0);
+    this.add.text(W - 38, 22,
+      `FASE  ${String(bestPhase).padStart(2, "0")} / ${String(LEVELS.length).padStart(2, "0")}  ·  MELHOR  ${String(best).padStart(3, "0")} COINS`,
+      TEXT_PRESETS.monoLabel).setOrigin(1, 0);
 
     this.add.text(22, H - 22, "GAMEDEV.07", TEXT_PRESETS.hint).setOrigin(0, 1);
     this.add.text(W - 22, H - 22, "BRICOLAGE · GEIST", TEXT_PRESETS.hint).setOrigin(1, 1);
@@ -52,7 +56,8 @@ export class MenuScene extends Phaser.Scene {
       K: kb.addKey(Phaser.Input.Keyboard.KeyCodes.K),
     };
     kb.on("keydown", unlockAudio);
-    this.input.on("pointerdown", () => { unlockAudio(); this.scene.start("game"); });
+    // Sempre começa da fase 1 — best phase é só pra mostrar progresso, não pra pular fases.
+    this.input.on("pointerdown", () => { unlockAudio(); this.scene.start("game", { phase: 1 }); });
   }
 
   private drawDecoration() {
@@ -96,7 +101,7 @@ export class MenuScene extends Phaser.Scene {
   update() {
     const justDown = Phaser.Input.Keyboard.JustDown;
     if (justDown(this.keys.K)) takeScreenshot(this.game, "gamedev-07-platformer-menu");
-    if (justDown(this.keys.SPACE) || justDown(this.keys.ENTER)) this.scene.start("game");
+    if (justDown(this.keys.SPACE) || justDown(this.keys.ENTER)) this.scene.start("game", { phase: 1 });
   }
 
   private loadBest(): number {
@@ -105,6 +110,14 @@ export class MenuScene extends Phaser.Scene {
       const n = raw ? parseInt(raw, 10) : 0;
       return Number.isFinite(n) && n > 0 ? n : 0;
     } catch { return 0; }
+  }
+
+  private loadBestPhase(): number {
+    try {
+      const raw = localStorage.getItem(BESTPHASE_KEY);
+      const n = raw ? parseInt(raw, 10) : 1;
+      return Number.isFinite(n) && n >= 1 ? Math.min(n, LEVELS.length) : 1;
+    } catch { return 1; }
   }
 }
 

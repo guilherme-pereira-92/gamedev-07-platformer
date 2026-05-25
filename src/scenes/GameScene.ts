@@ -4,7 +4,10 @@ import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, getResponsiveT
 import { takeScreenshot } from "../screenshot";
 import { playTone, unlockAudio } from "../audio";
 
+// ---------- physics ----------
 const TILE = 32;
+const ROWS = 19;                 // world height em tiles. 19*32=608 ≥ canvas 600.
+const WORLD_H = ROWS * TILE;
 const PLAYER_W = 22;
 const PLAYER_H = 30;
 
@@ -13,34 +16,139 @@ const JUMP_VELOCITY = -500;
 const MAX_FALL = 700;
 const COYOTE_MS = 110;
 const JUMP_BUFFER_MS = 110;
+// Com gravidade 900 (config no main.ts) + JUMP_VELOCITY -500, dá:
+//   - altura máxima de pulo: 500² / (2·900) = 138.9px ≈ 4.3 tiles
+//   - distância horizontal máxima: 220 · (2·500/900) ≈ 244px ≈ 7.6 tiles
+// Use isso pra calibrar gaps e plataformas: gap ≤ 7 tiles, salto vertical ≤ 4 tiles.
 
-// Level ASCII: each char is one tile (32×32 logical).
-// '=' = solid block / ground
-// 'c' = coin
-// 'G' = goal flag
-// ' ' = empty
-// 'P' = player spawn
-const LEVEL: string[] = [
-  "                                                                                                              ",
-  "                                                                                                              ",
-  "                                                                                                              ",
-  "                                                                                                              ",
-  "                          ===              c                                                                  ",
-  "                                                                                                              ",
-  "                                                  ===              ===                                        ",
-  "                                                                                          c                   ",
-  "          ===                  c                                                                              ",
-  "                                                                                ====                          ",
-  "  P     c                                                       c     c                                  G    ",
-  "==========    =====    ======================    =====    =========    ==========    ==========    ===========",
+// ---------- storage ----------
+const BESTPHASE_KEY = "gamedev-07-platformer-bestphase";
+const BESTCOINS_KEY = "gamedev-07-platformer-bestcoins";
+
+// ---------- levels ----------
+interface LevelData {
+  width: number; // em tiles
+  spawn: { row: number; col: number };
+  goal: { row: number; col: number };
+  groundRow: number;
+  groundGaps: Array<{ start: number; end: number }>; // start inclusive, end exclusive
+  platforms: Array<{ row: number; start: number; end: number }>;
+  coins: Array<{ row: number; col: number }>;
+}
+
+// Convenção de design (verificada matematicamente):
+//   - ground sempre em row 17 (chão em y=544, player spawn em row 16 fica em pé em y~528)
+//   - sky/jogo: rows 0-16 (acima do chão, com platforms entre rows 10-15)
+//   - gaps no chão são preenchidos por platforms no ar formando uma rota
+//   - todas as moedas verificadas pra alcançabilidade
+const LEVELS: LevelData[] = [
+  // PHASE 1: aquece — 50 tiles, 2 gaps pequenos com platforms-ponte
+  {
+    width: 50,
+    spawn: { row: 16, col: 2 },
+    goal: { row: 16, col: 48 },
+    groundRow: 17,
+    groundGaps: [
+      { start: 14, end: 18 },
+      { start: 32, end: 36 },
+    ],
+    platforms: [
+      { row: 14, start: 14, end: 18 }, // bridge do gap 1, com folga vertical
+      { row: 14, start: 32, end: 36 }, // bridge do gap 2
+    ],
+    coins: [
+      { row: 15, col: 8 },   // chão, salto curto
+      { row: 13, col: 16 },  // em cima do bridge 1
+      { row: 15, col: 24 },  // chão (terreno meio)
+      { row: 13, col: 34 },  // em cima do bridge 2
+      { row: 15, col: 42 },  // chão (terreno final)
+    ],
+  },
+  // PHASE 2: 80 tiles, gaps maiores, plataformas em alturas variadas, requer chained jumps
+  {
+    width: 80,
+    spawn: { row: 16, col: 2 },
+    goal: { row: 16, col: 78 },
+    groundRow: 17,
+    groundGaps: [
+      { start: 10, end: 14 },
+      { start: 28, end: 33 },
+      { start: 48, end: 52 },
+      { start: 64, end: 68 },
+    ],
+    platforms: [
+      { row: 14, start: 11, end: 14 },  // bridge gap 1
+      { row: 13, start: 28, end: 33 },  // bridge gap 2 (mais alto)
+      { row: 12, start: 36, end: 39 },  // stepping stone
+      { row: 11, start: 42, end: 45 },  // alto (recompensa)
+      { row: 14, start: 49, end: 51 },  // bridge gap 3
+      { row: 14, start: 64, end: 68 },  // bridge gap 4
+    ],
+    coins: [
+      { row: 15, col: 5 },
+      { row: 13, col: 12 },  // em cima do bridge 1
+      { row: 12, col: 30 },  // em cima do bridge 2
+      { row: 11, col: 37 },  // em cima da stepping
+      { row: 10, col: 43 },  // em cima da plataforma alta (recompensa)
+      { row: 15, col: 56 },
+      { row: 13, col: 66 },  // em cima do bridge 4
+      { row: 16, col: 73 },
+    ],
+  },
+  // PHASE 3: 120 tiles, gaps frequentes, plataformas exigem precisão
+  {
+    width: 120,
+    spawn: { row: 16, col: 2 },
+    goal: { row: 16, col: 118 },
+    groundRow: 17,
+    groundGaps: [
+      { start: 9, end: 13 },
+      { start: 20, end: 26 },
+      { start: 35, end: 41 },
+      { start: 50, end: 56 },
+      { start: 67, end: 73 },
+      { start: 84, end: 90 },
+      { start: 100, end: 107 },
+    ],
+    platforms: [
+      { row: 14, start: 9, end: 13 },
+      { row: 13, start: 20, end: 26 },
+      { row: 11, start: 28, end: 31 },   // alto, pulado de (13,20-26)
+      { row: 13, start: 35, end: 41 },
+      { row: 11, start: 43, end: 47 },
+      { row: 14, start: 50, end: 56 },
+      { row: 12, start: 60, end: 64 },
+      { row: 14, start: 67, end: 73 },
+      { row: 12, start: 78, end: 82 },
+      { row: 14, start: 84, end: 90 },
+      { row: 11, start: 92, end: 96 },
+      { row: 14, start: 100, end: 107 },
+      { row: 12, start: 110, end: 114 },
+    ],
+    coins: [
+      { row: 15, col: 5 },
+      { row: 13, col: 11 },
+      { row: 12, col: 23 },
+      { row: 10, col: 29 },   // recompensa em cima do alto
+      { row: 12, col: 38 },
+      { row: 10, col: 45 },   // recompensa
+      { row: 13, col: 53 },
+      { row: 11, col: 62 },
+      { row: 13, col: 70 },
+      { row: 11, col: 80 },
+      { row: 13, col: 87 },
+      { row: 10, col: 94 },   // recompensa
+      { row: 13, col: 103 },
+      { row: 11, col: 112 },
+    ],
+  },
 ];
 
-const LEVEL_HEIGHT_TILES = LEVEL.length;
-const LEVEL_WIDTH_TILES = Math.max(...LEVEL.map((r) => r.length));
-const WORLD_W = LEVEL_WIDTH_TILES * TILE;
-const WORLD_H = LEVEL_HEIGHT_TILES * TILE;
-
 type GameState = "playing" | "paused" | "win" | "dead";
+
+interface SceneInitData {
+  phase?: number;
+}
 
 export class GameScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Rectangle;
@@ -48,6 +156,10 @@ export class GameScene extends Phaser.Scene {
   private tiles!: Phaser.Physics.Arcade.StaticGroup;
   private coins: Phaser.GameObjects.Arc[] = [];
   private goal!: Phaser.GameObjects.Rectangle;
+
+  private currentPhase = 1;
+  private level!: LevelData;
+  private worldW = 0;
 
   private coinsCollected = 0;
   private totalCoins = 0;
@@ -59,6 +171,7 @@ export class GameScene extends Phaser.Scene {
   private lastJumpRequestedAt = 0;
 
   private scoreLabel!: Phaser.GameObjects.Text;
+  private phaseLabel!: Phaser.GameObjects.Text;
   private overlayBg!: Phaser.GameObjects.Rectangle;
   private overlayTitle!: Phaser.GameObjects.Text;
   private overlayHint!: Phaser.GameObjects.Text;
@@ -70,13 +183,25 @@ export class GameScene extends Phaser.Scene {
 
   constructor() { super("game"); }
 
+  init(data: SceneInitData) {
+    const phase = data?.phase ?? 1;
+    this.currentPhase = Phaser.Math.Clamp(phase, 1, LEVELS.length);
+    this.level = LEVELS[this.currentPhase - 1];
+    this.worldW = this.level.width * TILE;
+    // Reset fields que persistem entre cenas se não resetar
+    this.coinsCollected = 0;
+    this.totalCoins = 0;
+    this.state = "playing";
+    this.coins = [];
+    this.lastGroundedAt = 0;
+    this.lastJumpRequestedAt = 0;
+  }
+
   create() {
-    // Mario-style camera: main cam scrolls dentro do world (3.7k px de largura)
-    // seguindo o player; UI cam fica fixa no viewport 800×600 pra desenhar chrome.
     const W = this.scale.width;
     const H = this.scale.height;
     const main = this.cameras.main;
-    main.setBounds(0, 0, WORLD_W, WORLD_H);
+    main.setBounds(0, 0, this.worldW, WORLD_H);
 
     const uiCam = this.cameras.add(0, 0, W, H);
     uiCam.setScroll(0, 0);
@@ -84,17 +209,15 @@ export class GameScene extends Phaser.Scene {
     const registerWorld = (obj: Phaser.GameObjects.GameObject) => uiCam.ignore(obj);
     const registerUi = (obj: Phaser.GameObjects.GameObject) => main.ignore(obj);
 
-    // Background fills entire WORLD area (camera scrolls within)
-    const bg = this.add.rectangle(0, 0, WORLD_W, WORLD_H, COLOR_HEX.bg).setOrigin(0, 0);
+    // BG fills the whole world (camera scrolls within)
+    const bg = this.add.rectangle(0, 0, this.worldW, WORLD_H, COLOR_HEX.bg).setOrigin(0, 0);
     registerWorld(bg);
 
-    // Scanlines only over viewport (UI cam)
     const scanlines = drawDiagonalScanlines(this, W, H, 18, 0.04);
     registerUi(scanlines);
 
-    // World bounds: bottom ABERTO (player cai = morre). Mario-style.
-    this.physics.world.setBounds(0, 0, WORLD_W, WORLD_H);
-    this.physics.world.setBoundsCollision(true, true, true, false); // left, right, up, NÃO down
+    this.physics.world.setBounds(0, 0, this.worldW, WORLD_H);
+    this.physics.world.setBoundsCollision(true, true, true, false); // bottom open
 
     this.tiles = this.physics.add.staticGroup();
     this.buildLevel(registerWorld);
@@ -118,9 +241,7 @@ export class GameScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.player, this.goal, () => this.winLevel());
 
-    // Mario-style camera: player sempre próximo do centro, mapa rola atrás.
-    // SEM deadzone (deadzone causa player "fixar" em zonas) — só lerp suave.
-    this.cameras.main.startFollow(this.player, true, 0.18, 0.18);
+    main.startFollow(this.player, true, 0.18, 0.18);
 
     this.drawChrome(registerUi);
     this.drawOverlay(registerUi);
@@ -142,47 +263,72 @@ export class GameScene extends Phaser.Scene {
     kb.on("keydown", unlockAudio);
   }
 
+  // ---------- level building (from structured data) ----------
+
   private buildLevel(registerWorld: (obj: Phaser.GameObjects.GameObject) => void) {
-    this.coins = [];
-    this.totalCoins = 0;
-    for (let r = 0; r < LEVEL.length; r++) {
-      const row = LEVEL[r];
-      for (let c = 0; c < row.length; c++) {
-        const ch = row[c];
-        const x = c * TILE + TILE / 2;
-        const y = r * TILE + TILE / 2;
-        if (ch === "=") {
-          const tile = this.add.rectangle(x, y, TILE - 2, TILE - 2, COLOR_HEX.bgSoft);
-          tile.setStrokeStyle(1, COLOR_HEX.border, 1);
-          this.tiles.add(tile);
-          registerWorld(tile);
-        } else if (ch === "c") {
-          const coin = this.add.circle(x, y, 6, COLOR_HEX.amber);
-          this.physics.add.existing(coin, true);
-          this.coins.push(coin);
-          this.totalCoins++;
-          registerWorld(coin);
-          // pulse animation
-          this.tweens.add({
-            targets: coin,
-            scale: { from: 0.85, to: 1.1 },
-            duration: 700,
-            yoyo: true,
-            repeat: -1,
-            ease: "Sine.easeInOut",
-          });
-        } else if (ch === "G") {
-          this.goal = this.add.rectangle(x, y - TILE / 2, 4, 48, COLOR_HEX.secondary).setOrigin(0.5, 0);
-          this.physics.add.existing(this.goal, true);
-          registerWorld(this.goal);
-          const flag = this.add.triangle(x + 8, y - TILE / 2 + 6, 0, 0, 14, 6, 0, 12, COLOR_HEX.secondary);
-          registerWorld(flag);
-        } else if (ch === "P") {
-          this.spawnX = x;
-          this.spawnY = y;
-        }
+    const lvl = this.level;
+
+    // ground row, skipping gaps
+    for (let col = 0; col < lvl.width; col++) {
+      const inGap = lvl.groundGaps.some((g) => col >= g.start && col < g.end);
+      if (!inGap) this.addTile(lvl.groundRow, col, registerWorld);
+    }
+
+    // platforms (cada uma é uma faixa horizontal de tiles)
+    for (const plat of lvl.platforms) {
+      for (let col = plat.start; col < plat.end; col++) {
+        this.addTile(plat.row, col, registerWorld);
       }
     }
+
+    // coins
+    for (const cn of lvl.coins) {
+      this.addCoin(cn.row, cn.col, registerWorld);
+    }
+    this.totalCoins = lvl.coins.length;
+
+    // goal
+    this.addGoal(lvl.goal.row, lvl.goal.col, registerWorld);
+
+    // spawn
+    this.spawnX = lvl.spawn.col * TILE + TILE / 2;
+    this.spawnY = lvl.spawn.row * TILE + TILE / 2;
+  }
+
+  private addTile(row: number, col: number, registerWorld: (obj: Phaser.GameObjects.GameObject) => void) {
+    const x = col * TILE + TILE / 2;
+    const y = row * TILE + TILE / 2;
+    const tile = this.add.rectangle(x, y, TILE - 2, TILE - 2, COLOR_HEX.bgSoft);
+    tile.setStrokeStyle(1, COLOR_HEX.border, 1);
+    this.tiles.add(tile);
+    registerWorld(tile);
+  }
+
+  private addCoin(row: number, col: number, registerWorld: (obj: Phaser.GameObjects.GameObject) => void) {
+    const x = col * TILE + TILE / 2;
+    const y = row * TILE + TILE / 2;
+    const coin = this.add.circle(x, y, 6, COLOR_HEX.amber);
+    this.physics.add.existing(coin, true);
+    this.coins.push(coin);
+    registerWorld(coin);
+    this.tweens.add({
+      targets: coin,
+      scale: { from: 0.85, to: 1.1 },
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+  }
+
+  private addGoal(row: number, col: number, registerWorld: (obj: Phaser.GameObjects.GameObject) => void) {
+    const x = col * TILE + TILE / 2;
+    const y = row * TILE + TILE / 2;
+    this.goal = this.add.rectangle(x, y - TILE / 2, 4, 48, COLOR_HEX.secondary).setOrigin(0.5, 0);
+    this.physics.add.existing(this.goal, true);
+    registerWorld(this.goal);
+    const flag = this.add.triangle(x + 8, y - TILE / 2 + 6, 0, 0, 14, 6, 0, 12, COLOR_HEX.secondary);
+    registerWorld(flag);
   }
 
   // ---------- update ----------
@@ -203,14 +349,12 @@ export class GameScene extends Phaser.Scene {
       return;
     }
     if ((this.state === "dead" || this.state === "win") && Phaser.Input.Keyboard.JustDown(this.keys.R)) {
-      this.scene.restart();
+      this.handleRestartOrAdvance();
       return;
     }
 
     if (this.state !== "playing") return;
 
-    // Death by fall — bottom do world está aberto (setBoundsCollision down=false).
-    // Player cai indefinidamente até passar WORLD_H, então morre.
     if (this.player.y > WORLD_H + 80) {
       this.die();
       return;
@@ -226,12 +370,10 @@ export class GameScene extends Phaser.Scene {
                   || Phaser.Input.Keyboard.JustDown(this.keys.UP)
                   || Phaser.Input.Keyboard.JustDown(this.keys.W);
 
-    // Horizontal
     if (left && !right) this.playerBody.setVelocityX(-MOVE_SPEED);
     else if (right && !left) this.playerBody.setVelocityX(MOVE_SPEED);
     else this.playerBody.setVelocityX(0);
 
-    // Coyote time + jump buffer
     const grounded = this.playerBody.blocked.down || this.playerBody.touching.down;
     if (grounded) this.lastGroundedAt = time;
     if (jumpDown) this.lastJumpRequestedAt = time;
@@ -247,14 +389,39 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  // ---------- death / win ----------
+  // ---------- death / win / restart ----------
+
+  // R faz coisas diferentes dependendo do estado:
+  //   - dead: reinicia a fase atual
+  //   - win (não-final): vai pra próxima fase
+  //   - win (última fase): volta pro menu
+  private handleRestartOrAdvance() {
+    if (this.state === "dead") {
+      this.scene.start("game", { phase: this.currentPhase });
+      return;
+    }
+    if (this.state === "win") {
+      const next = this.currentPhase + 1;
+      if (next > LEVELS.length) {
+        this.scene.start("menu");
+      } else {
+        this.scene.start("game", { phase: next });
+      }
+    }
+  }
 
   private die() {
     this.state = "dead";
+    // Para o player no lugar — evita continuar caindo indefinidamente,
+    // o que costuma confundir o restart da câmera.
+    this.playerBody.setVelocity(0, 0);
+    this.playerBody.setAllowGravity(false);
+
     playTone(180, 350, "sawtooth", 0.18);
     this.cameras.main.shake(280, 0.012);
     this.cameras.main.flash(150, 220, 40, 40, false);
     this.time.delayedCall(700, () => {
+      if (this.state !== "dead") return;
       this.showOverlay("VOCÊ MORREU", "R PRA TENTAR DE NOVO · ESC MENU");
     });
   }
@@ -262,21 +429,38 @@ export class GameScene extends Phaser.Scene {
   private winLevel() {
     if (this.state !== "playing") return;
     this.state = "win";
+    this.playerBody.setVelocity(0, 0);
+    this.playerBody.setAllowGravity(false);
+
     this.saveBest();
+
     playTone(660, 120, "triangle", 0.14);
     this.time.delayedCall(140, () => playTone(880, 150, "triangle", 0.14));
     this.time.delayedCall(320, () => playTone(1175, 220, "triangle", 0.14));
     this.cameras.main.flash(200, 122, 209, 122, false);
+
     this.time.delayedCall(700, () => {
-      this.showOverlay("CHEGOU!", `${this.coinsCollected}/${this.totalCoins} moedas · R pra jogar de novo · ESC menu`);
+      if (this.state !== "win") return;
+      const isLast = this.currentPhase >= LEVELS.length;
+      const title = isLast ? "VITÓRIA!" : "FASE COMPLETA";
+      const hint = isLast
+        ? `${this.coinsCollected}/${this.totalCoins} moedas · você zerou as ${LEVELS.length} fases · R / ESC pro menu`
+        : `${this.coinsCollected}/${this.totalCoins} moedas · R pra próxima fase · ESC menu`;
+      this.showOverlay(title, hint);
     });
   }
 
   private saveBest() {
     try {
-      const raw = localStorage.getItem("gamedev-07-platformer-bestcoins");
-      const prev = raw ? parseInt(raw, 10) : 0;
-      if (this.coinsCollected > prev) localStorage.setItem("gamedev-07-platformer-bestcoins", String(this.coinsCollected));
+      // best coin count (global, across phases)
+      const rawC = localStorage.getItem(BESTCOINS_KEY);
+      const prevC = rawC ? parseInt(rawC, 10) : 0;
+      if (this.coinsCollected > prevC) localStorage.setItem(BESTCOINS_KEY, String(this.coinsCollected));
+      // best phase reached
+      const rawP = localStorage.getItem(BESTPHASE_KEY);
+      const prevP = rawP ? parseInt(rawP, 10) : 1;
+      const reached = Math.min(LEVELS.length, this.currentPhase + 1);
+      if (reached > prevP) localStorage.setItem(BESTPHASE_KEY, String(reached));
     } catch {}
   }
 
@@ -290,7 +474,10 @@ export class GameScene extends Phaser.Scene {
     const dot = createPulsingDot(this, this.scale.width - 22 - 4, 22 + 6, 4, COLOR_HEX.accent);
     registerUi(dot.dot); registerUi(dot.glow);
 
-    this.scoreLabel = this.add.text(this.scale.width - 38, 22, "", TEXT_PRESETS.monoLabel).setOrigin(1, 0);
+    this.phaseLabel = this.add.text(this.scale.width - 38, 22, "", TEXT_PRESETS.monoLabel).setOrigin(1, 0);
+    registerUi(this.phaseLabel);
+
+    this.scoreLabel = this.add.text(this.scale.width - 22, 44, "", TEXT_PRESETS.hint).setOrigin(1, 0);
     registerUi(this.scoreLabel);
 
     const bottomLeft = this.add.text(22, this.scale.height - 22, "GAMEDEV.07", TEXT_PRESETS.hint).setOrigin(0, 1);
@@ -304,6 +491,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private refreshChrome() {
+    this.phaseLabel.setText(`FASE  ${String(this.currentPhase).padStart(2, "0")} / ${String(LEVELS.length).padStart(2, "0")}`);
     this.scoreLabel.setText(`MOEDAS  ${this.coinsCollected}/${this.totalCoins}`);
   }
 
@@ -311,8 +499,12 @@ export class GameScene extends Phaser.Scene {
     const W = this.scale.width;
     const H = this.scale.height;
     this.overlayBg = this.add.rectangle(W / 2, H / 2, W, H, COLOR_HEX.bg, 0.82); registerUi(this.overlayBg);
-    this.overlayTitle = this.add.text(W / 2, H / 2 - 30, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize(getResponsiveTextSize(this, "hero")); registerUi(this.overlayTitle);
-    this.overlayHint = this.add.text(W / 2, H / 2 + 40, "", TEXT_PRESETS.hint).setOrigin(0.5); registerUi(this.overlayHint);
+    this.overlayTitle = this.add.text(W / 2, H / 2 - 30, "", TEXT_PRESETS.heroOutline)
+      .setOrigin(0.5)
+      .setFontSize(getResponsiveTextSize(this, "hero"));
+    registerUi(this.overlayTitle);
+    this.overlayHint = this.add.text(W / 2, H / 2 + 40, "", TEXT_PRESETS.hint).setOrigin(0.5);
+    registerUi(this.overlayHint);
     this.hideOverlay();
   }
 
@@ -327,5 +519,6 @@ export class GameScene extends Phaser.Scene {
     this.overlayTitle.setVisible(false);
     this.overlayHint.setVisible(false);
   }
-
 }
+
+export { LEVELS, BESTPHASE_KEY, BESTCOINS_KEY };
