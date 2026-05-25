@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "number": 7,
+  "slug": "07-platformer",
+  "title": "Platformer",
+  "shortDescription": "Pule plataformas, colete moedas, chegue à bandeira — primeiro 2D com gravidade.",
+  "stack": ["TypeScript", "Phaser 3", "Vite", "Phaser Arcade Physics"],
+  "concepts": [
+    "gravidade + jumping com Arcade physics",
+    "coyote time (110ms — pode pular logo após sair da plataforma)",
+    "jump buffer (110ms — input lido antes mesmo de pousar)",
+    "tilemap ASCII inline (didático antes de Tiled)",
+    "static group de tiles pra colisão",
+    "câmera follow com deadzone",
+    "world bounds maiores que viewport (scrolling)",
+    "coins como sensors (overlap) com pulse animation",
+    "goal flag (overlap → vitória)",
+    "morte por queda (y > world bottom)",
+    "touch controls com botões on-screen (◄ ► ▲) pra mobile"
+  ],
+  "publishedAt": "2026-05-25",
+  "live": "https://guilherme-pereira-92.github.io/gamedev-07-platformer/",
+  "repo": "https://github.com/guilherme-pereira-92/gamedev-07-platformer",
+  "cover": "screenshots/cover.png",
+  "playable": true,
+  "mobile": "responsive"
+}
