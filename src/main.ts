@@ -3,7 +3,6 @@ import { MenuScene } from "./scenes/MenuScene";
 import { GameScene } from "./scenes/GameScene";
 import { GameOverScene } from "./scenes/GameOverScene";
 import { COLORS, FONT_NAMES } from "./theme";
-import { isMobileLayout } from "./input";
 
 async function bootstrap() {
   try {
@@ -13,15 +12,11 @@ async function bootstrap() {
     ]);
   } catch {}
 
-  const mobile = isMobileLayout();
-
   new Phaser.Game({
     type: Phaser.AUTO,
     backgroundColor: COLORS.bg,
     parent: "game",
-    scale: mobile
-      ? { mode: Phaser.Scale.RESIZE, width: "100%", height: "100%" }
-      : { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH, width: 800, height: 600 },
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH, width: 800, height: 600 },
     input: { activePointers: 3 },
     physics: {
       default: "arcade",

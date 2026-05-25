@@ -1,9 +1,8 @@
 import Phaser from "phaser";
-import { COLOR_HEX, COLORS, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras, getResponsiveTextSize } from "../ui";
+import { COLOR_HEX, TEXT_PRESETS } from "../theme";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, getResponsiveTextSize } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone, unlockAudio } from "../audio";
-import { isTouchDevice } from "../input";
 
 const TILE = 32;
 const PLAYER_W = 22;
@@ -64,13 +63,6 @@ export class GameScene extends Phaser.Scene {
   private overlayTitle!: Phaser.GameObjects.Text;
   private overlayHint!: Phaser.GameObjects.Text;
 
-  private touchLeft = false;
-  private touchRight = false;
-  private touchJumpRequestedAt = 0;
-  private btnLeft!: Phaser.GameObjects.Rectangle;
-  private btnRight!: Phaser.GameObjects.Rectangle;
-  private btnJump!: Phaser.GameObjects.Rectangle;
-
   private keys!: Record<
     "LEFT" | "RIGHT" | "UP" | "A" | "D" | "W" | "SPACE" | "P" | "ESC" | "K" | "R",
     Phaser.Input.Keyboard.Key
@@ -79,21 +71,30 @@ export class GameScene extends Phaser.Scene {
   constructor() { super("game"); }
 
   create() {
-    // Dual camera: gameplay (world coords) + UI (chrome at viewport edges)
-    const { registerWorld, registerUi, onResize } = setupResponsiveCameras(this, WORLD_W, WORLD_H);
+    // Mario-style camera: main cam scrolls dentro do world (3.7k px de largura)
+    // seguindo o player; UI cam fica fixa no viewport 800×600 pra desenhar chrome.
+    const W = this.scale.width;
+    const H = this.scale.height;
+    const main = this.cameras.main;
+    main.setBounds(0, 0, WORLD_W, WORLD_H);
+
+    const uiCam = this.cameras.add(0, 0, W, H);
+    uiCam.setScroll(0, 0);
+
+    const registerWorld = (obj: Phaser.GameObjects.GameObject) => uiCam.ignore(obj);
+    const registerUi = (obj: Phaser.GameObjects.GameObject) => main.ignore(obj);
 
     // Background fills entire WORLD area (camera scrolls within)
     const bg = this.add.rectangle(0, 0, WORLD_W, WORLD_H, COLOR_HEX.bg).setOrigin(0, 0);
     registerWorld(bg);
 
     // Scanlines only over viewport (UI cam)
-    const scanlines = drawDiagonalScanlines(this, this.scale.width, this.scale.height, 18, 0.04);
+    const scanlines = drawDiagonalScanlines(this, W, H, 18, 0.04);
     registerUi(scanlines);
 
     // World bounds: bottom ABERTO (player cai = morre). Mario-style.
     this.physics.world.setBounds(0, 0, WORLD_W, WORLD_H);
     this.physics.world.setBoundsCollision(true, true, true, false); // left, right, up, NÃO down
-    this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
 
     this.tiles = this.physics.add.staticGroup();
     this.buildLevel(registerWorld);
@@ -123,12 +124,6 @@ export class GameScene extends Phaser.Scene {
 
     this.drawChrome(registerUi);
     this.drawOverlay(registerUi);
-    this.setupTouchControls(registerUi);
-
-    onResize(() => {
-      // Reposition chrome elements + touch buttons on resize
-      this.repositionChrome();
-    });
 
     const kb = this.input.keyboard!;
     this.keys = {
@@ -225,8 +220,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   private handleMovement(time: number, _delta: number) {
-    const left = this.keys.LEFT.isDown || this.keys.A.isDown || this.touchLeft;
-    const right = this.keys.RIGHT.isDown || this.keys.D.isDown || this.touchRight;
+    const left = this.keys.LEFT.isDown || this.keys.A.isDown;
+    const right = this.keys.RIGHT.isDown || this.keys.D.isDown;
     const jumpDown = Phaser.Input.Keyboard.JustDown(this.keys.SPACE)
                   || Phaser.Input.Keyboard.JustDown(this.keys.UP)
                   || Phaser.Input.Keyboard.JustDown(this.keys.W);
@@ -240,10 +235,6 @@ export class GameScene extends Phaser.Scene {
     const grounded = this.playerBody.blocked.down || this.playerBody.touching.down;
     if (grounded) this.lastGroundedAt = time;
     if (jumpDown) this.lastJumpRequestedAt = time;
-    if (this.touchJumpRequestedAt > 0) {
-      this.lastJumpRequestedAt = this.touchJumpRequestedAt;
-      this.touchJumpRequestedAt = 0;
-    }
 
     const canCoyoteJump = time - this.lastGroundedAt < COYOTE_MS;
     const jumpBuffered = time - this.lastJumpRequestedAt < JUMP_BUFFER_MS;
@@ -305,38 +296,11 @@ export class GameScene extends Phaser.Scene {
     const bottomLeft = this.add.text(22, this.scale.height - 22, "GAMEDEV.07", TEXT_PRESETS.hint).setOrigin(0, 1);
     registerUi(bottomLeft);
 
-    const bottomRight = this.add.text(this.scale.width - 22, this.scale.height - 22, isTouchDevice()
-      ? "◄ ► MOVER · ▲ PULAR · ESC MENU"
-      : "← → ↑ ESPAÇO · P PAUSAR · ESC MENU · K", TEXT_PRESETS.hint).setOrigin(1, 1);
+    const bottomRight = this.add.text(this.scale.width - 22, this.scale.height - 22,
+      "← → ↑ ESPAÇO · P PAUSAR · ESC MENU · K", TEXT_PRESETS.hint).setOrigin(1, 1);
     registerUi(bottomRight);
 
-    this._chromeRepositionables = { dot, scoreLabel: this.scoreLabel, bottomLeft, bottomRight };
     this.refreshChrome();
-  }
-
-  private _chromeRepositionables!: {
-    dot: { dot: Phaser.GameObjects.Arc; glow: Phaser.GameObjects.Arc };
-    scoreLabel: Phaser.GameObjects.Text;
-    bottomLeft: Phaser.GameObjects.Text;
-    bottomRight: Phaser.GameObjects.Text;
-  };
-
-  private repositionChrome() {
-    const W = this.scale.width;
-    const H = this.scale.height;
-    const c = this._chromeRepositionables;
-    c.dot.dot.setPosition(W - 22 - 4, 22 + 6);
-    c.dot.glow.setPosition(W - 22 - 4, 22 + 6);
-    c.scoreLabel.setPosition(W - 38, 22);
-    c.bottomLeft.setPosition(22, H - 22);
-    c.bottomRight.setPosition(W - 22, H - 22);
-    this.overlayBg.setPosition(W / 2, H / 2).setSize(W, H);
-    this.overlayTitle.setPosition(W / 2, H / 2 - 30);
-    this.overlayHint.setPosition(W / 2, H / 2 + 40);
-    // Touch buttons
-    if (this.btnLeft) this.btnLeft.setPosition(70, H - 70);
-    if (this.btnRight) this.btnRight.setPosition(180, H - 70);
-    if (this.btnJump) this.btnJump.setPosition(W - 70, H - 70);
   }
 
   private refreshChrome() {
@@ -364,42 +328,4 @@ export class GameScene extends Phaser.Scene {
     this.overlayHint.setVisible(false);
   }
 
-  // ---------- touch ----------
-
-  private setupTouchControls(registerUi: (obj: Phaser.GameObjects.GameObject) => void) {
-    if (!isTouchDevice()) return;
-    const W = this.scale.width;
-    const H = this.scale.height;
-    const BTN = 64;
-    const ALPHA = 0.18;
-
-    this.btnLeft = this.add.rectangle(70, H - 70, BTN, BTN, COLOR_HEX.fg, ALPHA).setStrokeStyle(1, COLOR_HEX.fg, 0.4).setInteractive();
-    const leftArrow = this.add.text(70, H - 70, "◄", { ...TEXT_PRESETS.bodyFg, fontSize: "28px" }).setOrigin(0.5);
-    registerUi(this.btnLeft); registerUi(leftArrow);
-
-    this.btnRight = this.add.rectangle(180, H - 70, BTN, BTN, COLOR_HEX.fg, ALPHA).setStrokeStyle(1, COLOR_HEX.fg, 0.4).setInteractive();
-    const rightArrow = this.add.text(180, H - 70, "►", { ...TEXT_PRESETS.bodyFg, fontSize: "28px" }).setOrigin(0.5);
-    registerUi(this.btnRight); registerUi(rightArrow);
-
-    this.btnJump = this.add.rectangle(W - 70, H - 70, BTN, BTN, COLOR_HEX.accent, ALPHA).setStrokeStyle(1, COLOR_HEX.accent, 0.6).setInteractive();
-    const jumpArrow = this.add.text(W - 70, H - 70, "▲", { ...TEXT_PRESETS.bodyFg, fontSize: "28px", color: COLORS.accent }).setOrigin(0.5);
-    registerUi(this.btnJump); registerUi(jumpArrow);
-
-    // Sync arrow text with button position on resize
-    this.scale.on("resize", () => {
-      leftArrow.setPosition(this.btnLeft.x, this.btnLeft.y);
-      rightArrow.setPosition(this.btnRight.x, this.btnRight.y);
-      jumpArrow.setPosition(this.btnJump.x, this.btnJump.y);
-    });
-
-    this.btnLeft.on("pointerdown", () => { this.touchLeft = true; });
-    this.btnLeft.on("pointerup", () => { this.touchLeft = false; });
-    this.btnLeft.on("pointerout", () => { this.touchLeft = false; });
-
-    this.btnRight.on("pointerdown", () => { this.touchRight = true; });
-    this.btnRight.on("pointerup", () => { this.touchRight = false; });
-    this.btnRight.on("pointerout", () => { this.touchRight = false; });
-
-    this.btnJump.on("pointerdown", () => { this.touchJumpRequestedAt = this.time.now; });
-  }
 }
