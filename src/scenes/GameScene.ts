@@ -90,8 +90,9 @@ export class GameScene extends Phaser.Scene {
     const scanlines = drawDiagonalScanlines(this, this.scale.width, this.scale.height, 18, 0.04);
     registerUi(scanlines);
 
-    // World bounds for physics + camera follow
+    // World bounds: bottom ABERTO (player cai = morre). Mario-style.
     this.physics.world.setBounds(0, 0, WORLD_W, WORLD_H);
+    this.physics.world.setBoundsCollision(true, true, true, false); // left, right, up, NÃO down
     this.cameras.main.setBounds(0, 0, WORLD_W, WORLD_H);
 
     this.tiles = this.physics.add.staticGroup();
@@ -116,9 +117,9 @@ export class GameScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.player, this.goal, () => this.winLevel());
 
-    // Camera follows player
-    this.cameras.main.startFollow(this.player, true, 0.12, 0.12);
-    this.cameras.main.setDeadzone(80, 60);
+    // Mario-style camera: player sempre próximo do centro, mapa rola atrás.
+    // SEM deadzone (deadzone causa player "fixar" em zonas) — só lerp suave.
+    this.cameras.main.startFollow(this.player, true, 0.18, 0.18);
 
     this.drawChrome(registerUi);
     this.drawOverlay(registerUi);
@@ -213,8 +214,9 @@ export class GameScene extends Phaser.Scene {
 
     if (this.state !== "playing") return;
 
-    // Death by fall
-    if (this.player.y > WORLD_H - 4) {
+    // Death by fall — bottom do world está aberto (setBoundsCollision down=false).
+    // Player cai indefinidamente até passar WORLD_H, então morre.
+    if (this.player.y > WORLD_H + 80) {
       this.die();
       return;
     }
