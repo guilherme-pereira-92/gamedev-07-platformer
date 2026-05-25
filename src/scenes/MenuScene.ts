@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { COLORS, COLOR_HEX, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel } from "../ui";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, getResponsiveTextSize } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { unlockAudio } from "../audio";
 import { isTouchDevice } from "../input";
@@ -28,7 +28,7 @@ export class MenuScene extends Phaser.Scene {
     this.add.text(W - 22, H - 22, "BRICOLAGE · GEIST", TEXT_PRESETS.hint).setOrigin(1, 1);
 
     this.add.text(W / 2, H * 0.18, "/ JORNADA GAMEDEV", { ...TEXT_PRESETS.monoLabel, color: COLORS.muted }).setOrigin(0.5);
-    this.add.text(W / 2, H * 0.32, "PLATFORMER", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize("88px");
+    this.add.text(W / 2, H * 0.32, "PLATFORMER", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize(getResponsiveTextSize(this, "hero"));
     this.add.text(W / 2, H * 0.42, "pule plataformas · colete moedas · chegue à bandeira", TEXT_PRESETS.body).setOrigin(0.5);
 
     // Decorative platformer setup: chão + player (laranja) + 3 platforms + 2 coins + flag

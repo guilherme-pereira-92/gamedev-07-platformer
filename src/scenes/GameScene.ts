@@ -1,6 +1,6 @@
 import Phaser from "phaser";
 import { COLOR_HEX, COLORS, TEXT_PRESETS } from "../theme";
-import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras } from "../ui";
+import { drawDiagonalScanlines, createPulsingDot, addCornerLabel, setupResponsiveCameras, getResponsiveTextSize } from "../ui";
 import { takeScreenshot } from "../screenshot";
 import { playTone, unlockAudio } from "../audio";
 import { isTouchDevice } from "../input";
@@ -347,7 +347,7 @@ export class GameScene extends Phaser.Scene {
     const W = this.scale.width;
     const H = this.scale.height;
     this.overlayBg = this.add.rectangle(W / 2, H / 2, W, H, COLOR_HEX.bg, 0.82); registerUi(this.overlayBg);
-    this.overlayTitle = this.add.text(W / 2, H / 2 - 30, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize("72px"); registerUi(this.overlayTitle);
+    this.overlayTitle = this.add.text(W / 2, H / 2 - 30, "", TEXT_PRESETS.heroOutline).setOrigin(0.5).setFontSize(getResponsiveTextSize(this, "hero")); registerUi(this.overlayTitle);
     this.overlayHint = this.add.text(W / 2, H / 2 + 40, "", TEXT_PRESETS.hint).setOrigin(0.5); registerUi(this.overlayHint);
     this.hideOverlay();
   }
